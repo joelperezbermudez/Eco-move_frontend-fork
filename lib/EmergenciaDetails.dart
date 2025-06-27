@@ -1,5 +1,13 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart'; // Importar url_launcher
+import 'package:url_launcher/url_launcher.dart';
+import 'package:eco_move_frontend/l10n/context_ext.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:eco_move_frontend/routes/frontend_routes.dart';
+import 'list_chats.dart';
+import 'chat.dart';
 
 class EmergenciaDetails extends StatelessWidget {
   final String title;
@@ -7,6 +15,7 @@ class EmergenciaDetails extends StatelessWidget {
   final double lat;
   final double lng;
   final String timestamp;
+  final String sender;
 
   const EmergenciaDetails({
     Key? key,
@@ -15,6 +24,7 @@ class EmergenciaDetails extends StatelessWidget {
     required this.lat,
     required this.lng,
     required this.timestamp,
+    required this.sender
   }) : super(key: key);
 
   Future<void> _openGoogleMaps(double latitude, double longitude) async {
@@ -28,11 +38,62 @@ class EmergenciaDetails extends StatelessWidget {
     }
   }
 
+  // Add this method to create a new chat
+  Future<bool> _createNewChat(String email, BuildContext context) async {
+    try {
+      final FlutterSecureStorage secureStorage = FlutterSecureStorage();
+      final String? token = await secureStorage.read(key: 'access');
+
+      if (token == null) {
+        print('No access token found');
+        return false;
+      }
+
+      final response = await http.post(
+          Uri.parse(FrontendRoutes.build(FrontendRoutes.createChat)),
+          headers: {
+            'Authorization': 'Bearer $token',
+          },
+          body: {
+            'receptor_email': email,
+          }
+      );
+
+      if (response.statusCode == 201) {
+        print('Chat created successfully');
+        print('la body de la response es');
+        print(response.body);
+
+        final data = jsonDecode(response.body);
+
+ // Limpia la pila hasta la principal y navega a la lista de chats
+Navigator.of(context).pushAndRemoveUntil(
+  MaterialPageRoute(
+    builder: (context) => ChatScreen(
+      chatId: data['id'],
+      name: data['receptor_first_name'],
+      lastName: data['receptor_last_name'],
+    ),
+  ),
+  (route) => route.isFirst,
+);
+
+        return true;
+      } else {
+        print('Error creating chat: ${response.statusCode}: ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      print('Error creating chat: $e');
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Detalles de Emergencia'),
+        title: Text(context.loc.emergency_details_title),
         backgroundColor: Colors.redAccent,
       ),
       body: SingleChildScrollView(
@@ -80,7 +141,7 @@ class EmergenciaDetails extends StatelessWidget {
                     const Icon(Icons.location_on, color: Colors.redAccent),
                     const SizedBox(width: 10),
                     Text(
-                      'Latitud: $lat',
+                      '${context.loc.emergency_details_latitude}: $lat',
                       style: const TextStyle(
                         fontSize: 16,
                         color: Colors.black87,
@@ -94,7 +155,7 @@ class EmergenciaDetails extends StatelessWidget {
                     const Icon(Icons.location_on_outlined, color: Colors.redAccent),
                     const SizedBox(width: 10),
                     Text(
-                      'Longitud: $lng',
+                      '${context.loc.emergency_details_longitude}: $lng',
                       style: const TextStyle(
                         fontSize: 16,
                         color: Colors.black87,
@@ -112,7 +173,7 @@ class EmergenciaDetails extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Fecha: ${timestamp.split('T')[0]}',
+                            '${context.loc.emergency_details_date}: ${timestamp.split('T')[0]}',
                             style: const TextStyle(
                               fontSize: 16,
                               color: Colors.black87,
@@ -120,7 +181,7 @@ class EmergenciaDetails extends StatelessWidget {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            'Hora: ${timestamp.split('T')[1].split('.')[0]}',
+                            '${context.loc.emergency_details_time}: ${timestamp.split('T')[1].split('.')[0]}',
                             style: const TextStyle(
                               fontSize: 16,
                               color: Colors.black87,
@@ -133,16 +194,16 @@ class EmergenciaDetails extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
                 SizedBox(
-                  width: double.infinity, // Ocupa todo el ancho disponible
+                  width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () {
                       _openGoogleMaps(lat, lng);
                     },
                     icon: const Icon(Icons.map, color: Colors.white),
-                    label: const Text('Google Maps'),
+                    label: Text(context.loc.emergency_details_google_maps),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.purple,
-                      foregroundColor: Colors.white, // Texto blanco
+                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
                         vertical: 12,
                       ),
@@ -158,13 +219,13 @@ class EmergenciaDetails extends StatelessWidget {
                   children: [
                     ElevatedButton.icon(
                       onPressed: () {
-                        // Acción para rechazar ayuda (de momento no hace nada)
+                        Navigator.of(context).pop();
                       },
                       icon: const Icon(Icons.close, color: Colors.white),
-                      label: const Text('Rechazar'),
+                      label: Text(context.loc.emergency_details_reject),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.red,
-                        foregroundColor: Colors.white, // Texto blanco
+                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 12,
@@ -175,14 +236,40 @@ class EmergenciaDetails extends StatelessWidget {
                       ),
                     ),
                     ElevatedButton.icon(
-                      onPressed: () {
-                        // Acción para aceptar ayuda (de momento no hace nada)
+                      onPressed: () async {
+                        // Show loading indicator
+                        showDialog(
+                          context: context,
+                          barrierDismissible: false,
+                          builder: (BuildContext context) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          },
+                        );
+
+                        try {
+                          // Create the chat first
+                          bool chatCreated = await _createNewChat(sender, context);
+
+                        } catch (e) {
+                          // Close loading dialog
+                          Navigator.of(context).pop();
+
+                          // Show error message
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Error: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
                       },
                       icon: const Icon(Icons.check, color: Colors.white),
-                      label: const Text('Aceptar'),
+                      label: Text(context.loc.emergency_details_accept),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
-                        foregroundColor: Colors.white, // Texto blanco
+                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 12,

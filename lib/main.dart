@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:eco_move_frontend/calendar.dart';
+import 'package:eco_move_frontend/get_bookings.dart';
 import 'package:eco_move_frontend/l10n/l10n.dart';
 import 'package:eco_move_frontend/l10n/context_ext.dart';
 import 'package:eco_move_frontend/list_chats.dart';
@@ -19,19 +20,13 @@ import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'l10n/locale_provider.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:provider/provider.dart';
-import 'l10n/locale_provider.dart';
-import 'calendar.dart';
 import 'settings-menu.dart';
 import 'noti_service.dart';
-import 'alertManager.dart'; // Importa AlertManager
-
 import 'EmergencyScreen.dart';
 import 'EmergencyService.dart';
-import 'settings-menu.dart';
 import 'bici_detail_screen.dart';
+import 'bici_reservas_screen.dart'; 
+import 'config.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
@@ -47,7 +42,6 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AlertManager()), // Inicializa AlertManager
         ChangeNotifierProvider(create: (_) => LocaleProvider()..setLocale(Locale(langCode))), // Inicializa LocaleProvider
       ],
       child: const MyApp(),
@@ -66,7 +60,11 @@ class MyApp extends StatelessWidget {
       navigatorKey: navigatorKey, // Configura el GlobalKey aquí
       title: 'ECO-MOVE',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green[300]!),
+        appBarTheme: AppBarTheme(
+          backgroundColor: Color(0xff4a7c59),
+          foregroundColor: Colors.white,
+        ),
       ),
       locale: provider.locale,
       supportedLocales: L10n.all,
@@ -78,6 +76,10 @@ class MyApp extends StatelessWidget {
       ],
       home: const LoginScreen(),
       debugShowCheckedModeBanner: false,
+      routes: {
+        '/list-chats': (context) => ChatListScreen(),
+        // ...otras rutas...
+      },
     );
   }
 }
@@ -130,6 +132,8 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _isPollingStarted = false; // Variable de control para evitar múltiples inicios
   LatLng? _pollingPosition; // Posición utilizada en el polling
 
+  bool filtrarPorCoche = false;
+  
   @override
   void initState() {
     super.initState();
@@ -143,13 +147,10 @@ class _MyHomePageState extends State<MyHomePage> {
     if (_isPollingStarted) return; // Evita múltiples inicios
     _isPollingStarted = true;
 
-    print("Iniciando polling para emergencias...");
     _emergencyService
         .pollForNewEmergencyPointsStream(() => _pollingPosition) // Usa una función para obtener la posición actualizada
         .listen((newPoint) {
       if (newPoint != null) {
-        print("Llamando a showNotification para IDDDDD: ${newPoint.id}");
-        print("Llamando a showNotification para: ${newPoint.title}");
         _notiService.showNotification(
           title: "Nuevo Punto de Emergencia",
           body: "Se ha detectado un nuevo punto de emergencia: ${newPoint.title}",
@@ -183,24 +184,25 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     final url = Uri.parse(
-      '${FrontendRoutes.build(FrontendRoutes.refugios)}?lat=${myPosition!.latitude}&lng=${myPosition!.longitude}',
+      'http://nattech.fib.upc.edu:40430/api/refugios/listar_cercania/${myPosition!.latitude}/${myPosition!.longitude}/'
     );
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
+        print(data);
         setState(() {
           refugios =
               data.map((item) {
-                final refugio = item['refugio'];
+                final refugio = item;
                 return {
-                  "id_punt": refugio["id_punt"],
-                  "lat": refugio["lat"],
-                  "lng": refugio["lng"],
+                  "id_punt": refugio["id"],
+                  "lat": refugio["latitud"],
+                  "lng": refugio["longitud"],
                   "nombre": refugio["nombre"],
-                  "direccio": refugio["direccio"],
+                  "direccio": refugio["direccion"],
                   "numero_calle": refugio["numero_calle"],
-                  "distancia_km": item["distancia_km"],
+                  "distancia_km": item["distancia"],
                 };
               }).toList();
         });
@@ -214,7 +216,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _fetchBicis() async {
   final url = Uri.parse(
-    'http://127.0.0.1:8000/api/bicing/estaciones/',
+    FrontendRoutes.build(FrontendRoutes.biciDetailBase),
   );
   try {
     final response = await http.get(url);
@@ -236,6 +238,40 @@ class _MyHomePageState extends State<MyHomePage> {
     print('Error en la solicitud de bicis: $e');
   }
 }
+
+Future<List<String>> fetchCargadoresCoche() async {
+  final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+  final String? token = await _secureStorage.read(key: 'access');
+  if (token == null) {
+    print('Token no disponible');
+    return [];
+  }
+
+    final url = Uri.parse('${AppConfig.apiBase}/api_punts_carrega/vehicles/');
+    try {
+      final response = await http.get(
+        url,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        // Extrae todos los cargadores de todos los coches y los pone en una sola lista (sin duplicados)
+        final Set<String> cargadores = {};
+        for (var coche in data) {
+          if (coche['tipus_carregador'] != null) {
+            cargadores.addAll(List<String>.from(coche['tipus_carregador']));
+          }
+        }
+        return cargadores.toList();
+      } else {
+        print('Error al cargar vehículos: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      print('Error en la solicitud de vehículos: $e');
+      return [];
+    }
+  }
 
   Future<void> _fetchFiltros() async {
     final url = Uri.parse(
@@ -312,13 +348,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
     final uri = Uri.parse(FrontendRoutes.build(FrontendRoutes.filtrarEstacions))
       .replace(queryParameters: queryParameters);
-    
-    print(uri);
 
     try {
       final response = await http.get(uri);
       if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
+        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
 
         setState(() {
           estaciones =
@@ -333,6 +367,8 @@ class _MyHomePageState extends State<MyHomePage> {
                   "potencia": estacion["potencia"],
                   "tipus_velocitat": estacion["tipus_velocitat"],
                   "tipus_carregador": estacion["tipus_carregador"],
+                  "fuera_de_servicio": estacion["fuera_de_servicio"],
+
                 };
               }).toList();
           _isLoading = false;
@@ -364,13 +400,11 @@ class _MyHomePageState extends State<MyHomePage> {
     final uri = Uri.parse(
       '${FrontendRoutes.build(FrontendRoutes.puntmesproper)}?lat=${myPosition!.latitude}&lng=${myPosition!.longitude}',
     );
-    print(uri);
 
     try {
       final response = await http.get(uri);
       if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-
+        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
         setState(() {
           estaciones =
               data.map((item) {
@@ -412,10 +446,10 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  void _abrirRefugioScreen(BuildContext context, String idRefugio) {
+  void _abrirRefugioScreen(BuildContext context, String idRefugio, double? distanciaKm) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => RefugioScreen(idRefugio: idRefugio),
+        builder: (context) => RefugioScreen(idRefugio: idRefugio,distanciaKm: distanciaKm,),
       ),
     );
   }
@@ -455,7 +489,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
             mini: true,
             onPressed: _showFilterBottomSheet,
             backgroundColor: Colors.white,
-            child: const Icon(Icons.filter_list, color: Colors.green),
+            child: const Icon(Icons.filter_list, color: Color(0xff4a7c59)),
           ),
         ),
       ],
@@ -463,165 +497,232 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
   }
 
   Widget _buildEstacionCard(Map<String, dynamic> estacion) {
+    final bool fueraDeServicio = estacion['fuera_de_servicio'] == true;
+
     return InkWell(
       onTap: () {
+        if (fueraDeServicio) {
+          return;
+        }
         _abrirEstacionScreen(context, estacion['id_punt'].toString());
       },
       child: Card(
         elevation: 5,
         margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 15),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        child: Padding(
-          padding: const EdgeInsets.all(15.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: Colors.green.shade100,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.ev_station,
-                  color: Colors.green,
-                  size: 30,
-                ),
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      estacion['direccio'] ?? context.loc.station_address_unknown,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
+        color: fueraDeServicio ? Colors.grey.shade200 : Colors.white,
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(15.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: fueraDeServicio ? Colors.red.shade100 : Colors.green.shade100,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    const SizedBox(height: 5),
-                    Text(
-                      '${context.loc.station_city}: ${estacion['ciutat'] ?? 'N/A'}',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
+                    child: Icon(
+                      Icons.ev_station,
+                      color: fueraDeServicio ? Colors.red :Color(0xff4a7c59),
+                      size: 30,
                     ),
-                    const SizedBox(height: 5),
-                    Row(
+                  ),
+                  const SizedBox(width: 15),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Builder(
-                          builder: (context) {
-                            final plazasLibres =
-                                (int.tryParse(estacion['nplaces'].toString()) ??
-                                    0) >
-                                0;
-                            return Icon(
-                              plazasLibres ? Icons.check_circle : Icons.cancel,
-                              color: plazasLibres ? Colors.green : Colors.red,
-                              size: 18,
-                            );
-                          },
-                        ),
-                        const SizedBox(width: 5),
                         Text(
-                          '${context.loc.station_free_spots}: ${estacion['nplaces'] ?? 'N/A'}',
+                          estacion['direccio'] ?? context.loc.station_address_unknown,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${context.loc.station_city}: ${estacion['ciutat'] ?? 'N/A'}',
                           style: const TextStyle(
                             fontSize: 14,
                             color: Colors.black54,
                           ),
                         ),
+                        const SizedBox(height: 5),
+                        Row(
+                          children: [
+                            Builder(
+                              builder: (context) {
+                                final plazasLibres =
+                                    (int.tryParse(estacion['nplaces'].toString()) ??
+                                        0) >
+                                        0;
+                                return Icon(
+                                  plazasLibres ? Icons.check_circle : Icons.cancel,
+                                  color: plazasLibres ? Colors.green : Colors.red,
+                                  size: 18,
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              '${context.loc.station_free_spots}: ${estacion['nplaces'] ?? 'N/A'}',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${context.loc.station_power}: ${estacion['potencia'] ?? 'N/A'} kW',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.black54,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${context.loc.station_speed_type}: ${estacion['tipus_velocitat'] ?? 'N/A'}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.black54,
+                          ),
+                        ),
+                        if (estacion.containsKey('distancia_km'))
+                          const SizedBox(height: 5),
+                        if (estacion.containsKey('distancia_km'))
+                          Text(
+                            '${context.loc.station_distance}: ${estacion['distancia_km'].toStringAsFixed(2)} km',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Colors.blueGrey,
+                            ),
+                          ),
                       ],
                     ),
-                    const SizedBox(height: 5),
-                    Text(
-                      '${context.loc.station_power}: ${estacion['potencia'] ?? 'N/A'} kW',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
+                  ),
+                  const SizedBox(width: 10),
+                  IconButton(
+                    icon: Icon(Icons.arrow_forward, 
+                    color: fueraDeServicio ? Colors.grey : Colors.green
                     ),
-                    const SizedBox(height: 5),
-                    Text(
-                      '${context.loc.station_speed_type}: ${estacion['tipus_velocitat'] ?? 'N/A'}',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
+                    tooltip: fueraDeServicio ? context.loc.out_of_service : null,
+                    onPressed: () {
+                      if (fueraDeServicio) {
+                        return;
+                      }
+                      _abrirEstacionScreen(context, estacion['id_punt'].toString());
+                    },
+                  ),
+                ],
+              ),
+            ),
+            // Out of service label
+            if (fueraDeServicio)
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 200),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.only(
+                      topRight: Radius.circular(15),
+                      bottomLeft: Radius.circular(10),
                     ),
-                    if (estacion.containsKey('distancia_km'))
-                      const SizedBox(height: 5),
-                    if (estacion.containsKey('distancia_km'))
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
                       Text(
-                        '${context.loc.station_distance}: ${estacion['distancia_km'].toStringAsFixed(2)} km',
+                        context.loc.out_of_service ,
                         style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.blueGrey,
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(width: 10),
-              IconButton(
-                icon: const Icon(Icons.arrow_forward, color: Colors.green),
-                onPressed: () {
-                  _abrirEstacionScreen(context, estacion['id_punt'].toString());
-                },
-              ),
-            ],
-          ),
+          ],
         ),
       ),
     );
   }
 
-  MarkerLayer _buildMarkersLayer() {
-    List<dynamic> data;
-    if (_tipoMapa == 'refugios') {
-      data = refugios;
-    } else if (_tipoMapa == 'bicis') {
-      data = _bicis;
-    } else {
-     data = estaciones;
-    }
-    return MarkerLayer(
-      markers:
-          data
-              .map((estacion) {
-                final lat = estacion['lat'];
-                final lng = estacion['lng'];
-                return Marker(
-                  width: 40.0,
-                  height: 40.0,
-                  point: LatLng(lat, lng),
-                  builder:
-                      (ctx) => IconButton(
-                          icon: Icon(
-                           _tipoMapa == 'refugios'
-                ? Icons.ac_unit
-                : _tipoMapa == 'bicis'
-                    ? Icons.pedal_bike
-                    : Icons.location_on,
-          ),
-          color: _tipoMapa == 'refugios'
-              ? Colors.blue
-              : _tipoMapa == 'bicis'
-                  ? Colors.orange
-                  : Colors.green,
-          iconSize: 25,
-          onPressed: () {
+ MarkerLayer _buildMarkersLayer() {
+  List<dynamic> data;
+  if (_tipoMapa == 'refugios') {
+    data = refugios;
+  } else if (_tipoMapa == 'bicis') {
+    data = _bicis;
+  } else {
+    data = estaciones;
+  }
+  return MarkerLayer(
+    markers: data.map((estacion) {
+      final lat = estacion['lat'];
+      final lng = estacion['lng'];
+      IconData iconData;
+      Color borderColor;
+
+      if (_tipoMapa == 'refugios') {
+        iconData = Icons.ac_unit;
+        borderColor = Colors.lightBlueAccent;
+      } else if (_tipoMapa == 'bicis') {
+        iconData = Icons.pedal_bike;
+        borderColor = Colors.orange;
+      } else {
+        iconData = Icons.ev_station;
+        borderColor = Colors.green;
+      }
+
+      return Marker(
+        width: 28.0,
+        height: 28.0,
+        point: LatLng(double.tryParse(estacion['lat'].toString()) ?? 0.0, double.tryParse(estacion['lng'].toString()) ?? 0.0),
+        builder: (ctx) => GestureDetector(
+          onTap: () {
             if (_tipoMapa == 'refugios') {
-              _abrirRefugioScreen(context, estacion['id_punt'].toString());
+              _abrirRefugioScreen(context, estacion['id_punt'].toString(), (estacion['distancia_km'] as num?)?.toDouble());
             } else if (_tipoMapa == 'bicis') {
               _abrirBiciScreen(context, estacion['id'].toString());
             } else {
               _abrirEstacionScreen(context, estacion['id_punt'].toString());
             }
           },
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: borderColor, width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 4,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Icon(
+                iconData,
+                color: borderColor,
+                size: 15,
+              ),
+            ),
+          ),
         ),
       );
     }).toList(),
@@ -732,51 +833,98 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
   void _navigateToBookingsScreen() {
     Navigator.of(
       context,
-    ).push(MaterialPageRoute(builder: (context) => BookingCalendarPage()));
+    ).push(MaterialPageRoute(builder: (context) => BookingsScreen()));
   }
 
   Widget _buildHomePage() {
     return Padding(
       padding: const EdgeInsets.all(16.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          InkWell(
-            onTap: _navigateToBookingsScreen,
-            borderRadius: BorderRadius.circular(12.0),
-            splashColor: Colors.white24,
-            child: AnimatedContainer(
-              duration: Duration(milliseconds: 200),
-              padding: EdgeInsets.all(16.0),
-              decoration: BoxDecoration(
-                color: Colors.green,
-                borderRadius: BorderRadius.circular(12.0),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 5,
-                    offset: Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.start,
+      child: Center(
+        child: Card(
+          elevation: 8,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(32.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.calendar_month, color: Colors.white, size: 30),
-                  SizedBox(width: 10),
+                  Icon(Icons.eco, color: Color(0xff4a7c59), size: 60),
+                  const SizedBox(height: 24),
                   Text(
-                    context.loc.home_my_reservations,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                    context.loc.home_welcome,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          color: Color(0xff4a7c59),
+                          fontWeight: FontWeight.bold,
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 32),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (context) => const BiciReservasScreen()),
+                      );
+                    },
+                    icon: const Icon(Icons.pedal_bike),
+                    label: Text(context.loc.home_bicis),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 48),
+                      textStyle: const TextStyle(fontSize: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: _navigateToBookingsScreen,
+                    icon: const Icon(Icons.calendar_month),
+                    label: Text(context.loc.home_my_reservations),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xff4a7c59),
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 48),
+                      textStyle: const TextStyle(fontSize: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => EmergencyScreen(
+                            userLat: myPosition?.latitude ?? 0.0,
+                            userLng: myPosition?.longitude ?? 0.0,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.notifications, color: Colors.white),
+                    label:  Text(context.loc.home_emergency),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 48),
+                      textStyle: const TextStyle(fontSize: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -784,36 +932,62 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
   // Update _showFilterBottomSheet to allow multiple charger types selection
   void _showFilterBottomSheet() {
     TextEditingController ciudadController = TextEditingController(
-      text: ciudadSeleccionada, // Pre-fill with the selected city
+      text: ciudadSeleccionada,
     );
 
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true, // Allow the bottom sheet to expand dynamically
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setModalState) {
-            return Padding(
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.8,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          builder: (context, scrollController) {
+            return StatefulBuilder(
+              builder: (context, setModalState) {
+              return Padding(
               padding: EdgeInsets.only(
                 left: 16.0,
                 right: 16.0,
                 top: 16.0,
                 bottom: MediaQuery.of(context).viewInsets.bottom + 16.0,
               ),
+              child: SingleChildScrollView(
               child: Wrap(
-                alignment: WrapAlignment.center, // Center the content
+                alignment: WrapAlignment.center,
                 children: [
                   Center(
-                    child: Text(
-                      context.loc.filter_by_proximity,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.green,
+                    child: Container(
+                      width: 40,
+                      height: 6,
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(3),
                       ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.place, color: Color(0xff4a7c59)),
+                        const SizedBox(width: 8),
+                        Text(
+                          context.loc.filter_by_proximity,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xff4a7c59),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -829,21 +1003,66 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                           potenciaMinSeleccionada = potenciaMin;
                           potenciaMaxSeleccionada = potenciaMax;
                           ciudadController.clear();
-                          ciudadSeleccionada = ''; // Clear city filter
+                          ciudadSeleccionada = '';
+                          filtrarPorCoche = false;
                         }
                       });
                     },
-                    activeColor: Colors.green,
+                    activeColor: Color(0xff4a7c59),
                   ),
                   if (!filtrarPorCercanas) ...[
                     const SizedBox(height: 20),
+                    Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.directions_car, color: Color(0xff4a7c59)),
+                        const SizedBox(width: 8),
+                        Text(
+                          context.loc.filter_by_car,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xff4a7c59),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SwitchListTile(
+                    title: Text(context.loc.filter_show_only_car_compatible),
+                    value: filtrarPorCoche,
+                    onChanged: (bool value) async {
+                      setModalState(() {
+                        filtrarPorCoche = value;
+                      });
+                      if (value) {
+                        final cargadores = await fetchCargadoresCoche();
+                        setModalState(() {
+                          for (final cargador in cargadores) {
+                            if (!tiposCargadorSeleccionados.contains(cargador)) {
+                              tiposCargadorSeleccionados.add(cargador);
+                            }
+                          }
+                        });
+                      }
+                      else {
+                        final cargadores = await fetchCargadoresCoche();
+                        setModalState(() {
+                          tiposCargadorSeleccionados.removeWhere((cargador) => cargadores.contains(cargador));
+                        });
+                      }
+                    },
+                    activeColor: Color(0xff4a7c59),
+                  ),
                     Center(
                       child: Text(
                         context.loc.filter_by_speed,
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
-                          color: Colors.green,
+                          color: Color(0xff4a7c59),
                         ),
                       ),
                     ),
@@ -873,7 +1092,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                               labelStyle: TextStyle(
                                 color:
                                     velocidadesSeleccionadas.contains(velocidad)
-                                        ? Colors.green
+                                        ? Color(0xff4a7c59)
                                         : Colors.black,
                               ),
                             );
@@ -886,7 +1105,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
-                          color: Colors.green,
+                          color: Color(0xff4a7c59),
                         ),
                       ),
                     ),
@@ -916,7 +1135,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                               labelStyle: TextStyle(
                                 color:
                                     tiposCargadorSeleccionados.contains(tipo)
-                                        ? Colors.green
+                                        ? Color(0xff4a7c59)
                                         : Colors.black,
                               ),
                             );
@@ -929,7 +1148,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
-                          color: Colors.green,
+                          color: Color(0xff4a7c59),
                         ),
                       ),
                     ),
@@ -951,7 +1170,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                           potenciaMaxSeleccionada = values.end.round();
                         });
                       },
-                      activeColor: Colors.green,
+                      activeColor:Color(0xff4a7c59),
                       inactiveColor: Colors.grey.shade300,
                     ),
                     Row(
@@ -974,7 +1193,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
-                          color: Colors.green,
+                          color: Color(0xff4a7c59),
                         ),
                       ),
                     ),
@@ -1012,7 +1231,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                         }
                       },
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
+                        backgroundColor: Color(0xff4a7c59),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 30,
                           vertical: 15,
@@ -1029,11 +1248,14 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                   ),
                 ],
               ),
+              ),
             );
           },
         );
       },
     );
+  },
+  );
   }
 
  Widget _buildFiltro() {
@@ -1042,19 +1264,22 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
       'value': 'estaciones',
       'icon': Icons.ev_station,
       'tooltip': 'Estaciones de carga',
-      'color': Colors.green
+      'color': Color(0xff4a7c59),
+      'label': context.loc.charging_stations
     },
     {
       'value': 'refugios',
       'icon': Icons.ac_unit,
       'tooltip': 'Refugios climáticos',
-      'color': Colors.lightBlueAccent
+      'color': Colors.lightBlueAccent,
+      'label': context.loc.climate_shelters
     },
     {
       'value': 'bicis',
       'icon': Icons.pedal_bike,
       'tooltip': 'Bicing',
-      'color': Colors.orange
+      'color': Colors.orange,
+      'label': context.loc.bike_stations
     },
   ];
 
@@ -1069,14 +1294,9 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
           mini: true,
           onPressed: _showFilterBottomSheet,
           backgroundColor: Colors.white,
-          child: const Icon(Icons.filter_list, color: Colors.green),
+          child: const Icon(Icons.filter_list, color: Color(0xff4a7c59)),
         ),
         const SizedBox(width: 12),
-        Text(
-          "Ver:",
-          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(width: 8),
         SizedBox(
           height: 36,
           child: SingleChildScrollView(
@@ -1089,12 +1309,35 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                   child: ChoiceChip(
                     label: Tooltip(
                       message: opcion['tooltip'] as String,
-                      child: Icon(
-                        opcion['icon'] as IconData,
-                        size: 22,
-                        color: selected
-                            ? opcion['color'] as Color
-                            : Colors.black45,
+                      child: IntrinsicWidth(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              opcion['icon'] as IconData,
+                              size: 22,
+                              color: selected
+                                  ? opcion['color'] as Color
+                                  : Colors.black45,
+                            ),
+                            if (selected) ...[
+                              SizedBox(height: 1),
+                              Flexible(
+                                child: Text(
+                                  opcion['label'] as String, // Add 'label' field to your opciones data
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w500,
+                                    color: opcion['color'] as Color,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                     selected: selected,
@@ -1116,7 +1359,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                       }
                     },
                     elevation: 2,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                   ),
                 );
               }).toList(),
@@ -1162,20 +1405,31 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                 context: context,
                 builder: (BuildContext context) {
                   return AlertDialog(
-                    title: const Text('Cerrar sesión'),
-                    content: const Text(
-                      '¿Estás seguro que quieres cerrar sesión?',
+                    title: Text(context.loc.logout_sign_out),
+                    content: Text(
+                      context.loc.logout_are_you_sure,
                     ),
                     actions: [
                       TextButton(
                         onPressed: () {
                           Navigator.of(context).pop(); // Close the dialog
                         },
-                        child: const Text('Cancelar'),
+                        child: Text(context.loc.common_cancel),
                       ),
                       TextButton(
-                        onPressed: () {
-                          deleteTokens();
+                        onPressed: () async {
+                          // clear tokens
+                          await deleteTokens();
+                          await _secureStorage.deleteAll();
+
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setString('Language', 'en');
+
+                          // Reset locale
+                          Provider.of<LocaleProvider>(navigatorKey.currentContext!, listen: false)
+                            .setLocale(const Locale('en'));
+
+                          // Navigate back to login screen
                           Navigator.of(context).pop(); // Close the dialog
                           Navigator.of(context).pushAndRemoveUntil(
                             MaterialPageRoute(
@@ -1184,7 +1438,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                                 (Route<dynamic> route) => false,
                           );
                         },
-                        child: const Text('Cerrar sesión'),
+                        child: Text(context.loc.logout_sign_out),
                       ),
                     ],
                   );
@@ -1226,7 +1480,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
                 ),
                 const SizedBox(height: 10), // Space between the buttons
                 CircleAvatar(
-                  backgroundColor: Colors.green,
+                  backgroundColor: Color(0xff4a7c59),
                   radius: 20,
                   child: IconButton(
                     icon: const Icon(Icons.chat, color: Colors.white),
@@ -1244,20 +1498,6 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => EmergencyScreen(
-                userLat: myPosition?.latitude ?? 0.0,
-                userLng: myPosition?.longitude ?? 0.0,
-              ),
-            ),
-          );
-        },
-      backgroundColor: Colors.green,
-      child: const Icon(Icons.notifications),
-    ),
     bottomNavigationBar: BottomNavigationBar(
       items: <BottomNavigationBarItem>[
         BottomNavigationBarItem(
@@ -1274,7 +1514,7 @@ void _abrirBiciScreen(BuildContext context, String idBici) {
         ),
       ],
       currentIndex: _selectedIndex,
-      selectedItemColor: Colors.green,
+      selectedItemColor: Color(0xff4a7c59),
       onTap: _onItemTapped,
     ),
   );

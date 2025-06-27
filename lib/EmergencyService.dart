@@ -12,7 +12,7 @@ class EmergencyPoint {
   final double lat;
   final double lng;
   final String timestamp;
-  final int sender;
+  final String sender;
 
   EmergencyPoint({
     required this.id,
@@ -32,7 +32,7 @@ class EmergencyPoint {
       lat: json['lat'],
       lng: json['lng'],
       timestamp: json['timestamp'],
-      sender: json['sender'],
+      sender: json['sender_email'],
     );
   }
 }
@@ -41,6 +41,7 @@ class EmergencyService {
   final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
 
   List<EmergencyPoint> _previousPoints = []; // Almacena los puntos anteriores
+  bool _isFirstPoll = true;
 
   Future<String?> _getAccessToken() async {
     return await _secureStorage.read(key: 'access');
@@ -90,9 +91,7 @@ class EmergencyService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        print('data val ${data}');
         final List<dynamic> pointsData = data['alerts'];
-        print('points data val ${pointsData}');
         return pointsData.map((json) => EmergencyPoint.fromJson(json)).toList();
       } else if (response.statusCode == 401) {
         final refreshToken = await _secureStorage.read(key: 'refresh');
@@ -117,25 +116,28 @@ class EmergencyService {
       try {
         final newPoints = await fetchEmergencyPoints(lat, lng);
 
-        // Compara los nuevos puntos con los anteriores
-        for (final point in newPoints) {
-          if (!_previousPoints.any((p) => p.id == point.id)) {
-            print("Nuevo punto detectado: ${point.title}"); // Agregar print
-            _previousPoints = newPoints; // Actualiza los puntos anteriores
-            yield point; // Devuelve el nuevo punto detectado
+        if (_isFirstPoll) {
+          _previousPoints = newPoints;
+          _isFirstPoll = false;
+        } else {
+          // Compara los nuevos puntos con los anteriores
+          for (final point in newPoints) {
+            if (!_previousPoints.any((p) => p.id == point.id)) {
+              yield point; // Devuelve el nuevo punto detectado
+            }
           }
+          _previousPoints = newPoints; // Actualiza los puntos anteriores
         }
       } catch (e) {
         print("Error during polling: $e");
       }
 
-      // Espera antes de la siguiente iteración
       await Future.delayed(interval);
     }
   }
 
-  Stream<EmergencyPoint?> pollForNewEmergencyPointsStream(
-      LatLng? Function() getPosition, // Función para obtener la posición actualizada
+   Stream<EmergencyPoint?> pollForNewEmergencyPointsStream(
+      LatLng? Function() getPosition,
       {Duration interval = const Duration(seconds: 10)}) async* {
     while (true) {
       try {
@@ -145,20 +147,23 @@ class EmergencyService {
         } else {
           final newPoints = await fetchEmergencyPoints(position.latitude, position.longitude);
 
-          // Compara los nuevos puntos con los anteriores
-          for (final point in newPoints) {
-            if (!_previousPoints.any((p) => p.id == point.id)) {
-              print("Nuevo punto detectado: ${point.title}");
-              _previousPoints = newPoints; // Actualiza los puntos anteriores
-              yield point; // Devuelve el nuevo punto detectado
+          if (_isFirstPoll) {
+            _previousPoints = newPoints;
+            _isFirstPoll = false;
+          } else {
+            for (final point in newPoints) {
+              if (!_previousPoints.any((p) => p.id == point.id)) {
+                print("Nuevo punto detectado: ${point.title}");
+                yield point;
+              }
             }
+            _previousPoints = newPoints;
           }
         }
       } catch (e) {
         print("Error durante el polling: $e");
       }
 
-      // Espera antes de la siguiente iteración
       await Future.delayed(interval);
     }
   }
